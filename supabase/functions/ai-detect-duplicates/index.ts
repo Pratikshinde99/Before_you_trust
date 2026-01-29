@@ -23,36 +23,60 @@ Analyze pairs of incidents and determine:
 4. Distinguishing elements
 5. Recommendation for handling`;
 
+// Rate limit configuration
+const AI_RATE_LIMIT = 30;
+
+async function hashIp(ip: string): Promise<string> {
+  const encoder = new TextEncoder();
+  const data = encoder.encode(ip + Deno.env.get('SUPABASE_SERVICE_ROLE_KEY'));
+  const hashBuffer = await crypto.subtle.digest('SHA-256', data);
+  const hashArray = Array.from(new Uint8Array(hashBuffer));
+  return hashArray.map(b => b.toString(16).padStart(2, '0')).join('').slice(0, 16);
+}
+
+function getClientIp(req: Request): string {
+  return req.headers.get('x-forwarded-for')?.split(',')[0]?.trim() || 
+         req.headers.get('cf-connecting-ip') || 
+         req.headers.get('x-real-ip') ||
+         'unknown';
+}
+
 /**
  * POST /ai-detect-duplicates
  * 
- * Detects duplicate or similar incidents
- * 
- * Request body: {
- *   entity_id: string,
- *   new_incident: {
- *     title: string,
- *     description: string,
- *     date_occurred: string,
- *     category: string
- *   }
- * }
- * 
- * Response: {
- *   has_duplicates: boolean,
- *   has_similar: boolean,
- *   duplicates: Array<{ incident_id, similarity_score, matching_elements, explanation }>,
- *   similar: Array<{ incident_id, similarity_score, matching_elements, distinguishing_elements }>,
- *   recommendation: string,
- *   processing_note: string
- * }
+ * Detects duplicate or similar incidents. Rate limited to prevent abuse.
  */
 serve(async (req) => {
   if (req.method === 'OPTIONS') {
     return new Response('ok', { headers: corsHeaders });
   }
 
+  const supabaseAdmin = createClient(
+    Deno.env.get('SUPABASE_URL')!,
+    Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
+  );
+
   try {
+    // Rate limiting check
+    const clientIp = getClientIp(req);
+    const ipHash = await hashIp(clientIp);
+    const windowStart = new Date(Date.now() - 60 * 60 * 1000);
+
+    const { count } = await supabaseAdmin
+      .from('submission_rate_limits')
+      .select('*', { count: 'exact', head: true })
+      .eq('ip_hash', ipHash)
+      .eq('action_type', 'ai_call')
+      .gte('created_at', windowStart.toISOString());
+
+    if ((count || 0) >= AI_RATE_LIMIT) {
+      console.log(`AI rate limit exceeded for IP hash ${ipHash}`);
+      return new Response(
+        JSON.stringify({ error: 'Rate limit exceeded. Please try again later.' }),
+        { status: 429, headers: { ...corsHeaders, 'Content-Type': 'application/json', 'Retry-After': '3600' } }
+      );
+    }
+
     const { entity_id, new_incident } = await req.json();
 
     if (!entity_id || !new_incident) {
@@ -70,13 +94,13 @@ serve(async (req) => {
       );
     }
 
-    const supabase = createClient(
-      Deno.env.get('SUPABASE_URL')!,
-      Deno.env.get('SUPABASE_ANON_KEY')!
-    );
+    // Record rate limit event
+    await supabaseAdmin
+      .from('submission_rate_limits')
+      .insert({ ip_hash: ipHash, action_type: 'ai_call' });
 
-    // Fetch existing incidents for this entity
-    const { data: existingIncidents, error: fetchError } = await supabase
+    // Fetch existing incidents for this entity using service role
+    const { data: existingIncidents, error: fetchError } = await supabaseAdmin
       .from('incident_reports')
       .select('id, title, description, date_occurred, category, what_was_promised, what_actually_happened')
       .eq('entity_id', entity_id)
@@ -92,7 +116,6 @@ serve(async (req) => {
       );
     }
 
-    // If no existing incidents, no duplicates possible
     if (!existingIncidents || existingIncidents.length === 0) {
       return new Response(
         JSON.stringify({
