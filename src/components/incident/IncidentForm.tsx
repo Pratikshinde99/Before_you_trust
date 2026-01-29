@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { z } from 'zod';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
-import { AlertTriangle, Send } from 'lucide-react';
+import { FileText, Send, AlertTriangle } from 'lucide-react';
 import {
   Form,
   FormControl,
@@ -24,7 +24,9 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { Alert, AlertDescription } from '@/components/ui/alert';
 import { useToast } from '@/hooks/use-toast';
+import { useSubmitIncident } from '@/hooks/useApi';
 import { EntityType, IncidentCategory } from '@/types';
 
 const formSchema = z.object({
@@ -33,6 +35,8 @@ const formSchema = z.object({
   entityIdentifier: z.string().trim().min(2, 'Identifier must be at least 2 characters').max(255, 'Identifier must be less than 255 characters'),
   title: z.string().trim().min(10, 'Title must be at least 10 characters').max(200, 'Title must be less than 200 characters'),
   description: z.string().trim().min(50, 'Description must be at least 50 characters').max(2000, 'Description must be less than 2000 characters'),
+  whatWasPromised: z.string().max(1000, 'Must be less than 1000 characters').optional(),
+  whatActuallyHappened: z.string().max(1000, 'Must be less than 1000 characters').optional(),
   category: z.enum(['fraud', 'scam', 'harassment', 'misrepresentation', 'non_delivery', 'quality_issue', 'safety_concern', 'data_breach', 'unauthorized_charges', 'other'] as const),
   severity: z.enum(['low', 'medium', 'high', 'critical'] as const),
   dateOccurred: z.string().min(1, 'Date is required'),
@@ -41,47 +45,61 @@ const formSchema = z.object({
 
 type FormData = z.infer<typeof formSchema>;
 
-const entityTypeOptions: { value: EntityType; label: string }[] = [
-  { value: 'person', label: 'Person' },
-  { value: 'business', label: 'Business' },
-  { value: 'phone', label: 'Phone Number' },
-  { value: 'website', label: 'Website' },
-  { value: 'service', label: 'Service' },
+const entityTypeOptions: { value: EntityType; label: string; placeholder: string }[] = [
+  { value: 'person', label: 'Person', placeholder: 'Name, social handle, or other identifier' },
+  { value: 'business', label: 'Business', placeholder: 'Website, registration number, or address' },
+  { value: 'phone', label: 'Phone Number', placeholder: 'Phone number (e.g., +1-555-0123)' },
+  { value: 'website', label: 'Website', placeholder: 'Full URL (e.g., example.com)' },
+  { value: 'service', label: 'Service', placeholder: 'Service name, website, or app store link' },
 ];
 
-const categoryOptions: { value: IncidentCategory; label: string }[] = [
-  { value: 'fraud', label: 'Fraud' },
-  { value: 'scam', label: 'Scam' },
-  { value: 'harassment', label: 'Harassment' },
-  { value: 'misrepresentation', label: 'Misrepresentation' },
-  { value: 'non_delivery', label: 'Non-Delivery' },
-  { value: 'quality_issue', label: 'Quality Issue' },
-  { value: 'safety_concern', label: 'Safety Concern' },
-  { value: 'data_breach', label: 'Data Breach' },
-  { value: 'unauthorized_charges', label: 'Unauthorized Charges' },
-  { value: 'other', label: 'Other' },
+const categoryOptions: { value: IncidentCategory; label: string; description: string }[] = [
+  { value: 'fraud', label: 'Fraud', description: 'Intentional deception for financial gain' },
+  { value: 'scam', label: 'Scam', description: 'Deceptive scheme to obtain money or data' },
+  { value: 'harassment', label: 'Harassment', description: 'Unwanted, aggressive contact' },
+  { value: 'misrepresentation', label: 'Misrepresentation', description: 'False or misleading claims' },
+  { value: 'non_delivery', label: 'Non-Delivery', description: 'Goods/services not provided after payment' },
+  { value: 'quality_issue', label: 'Quality Issue', description: 'Product/service significantly below expectations' },
+  { value: 'safety_concern', label: 'Safety Concern', description: 'Health or safety risks' },
+  { value: 'data_breach', label: 'Data Breach', description: 'Unauthorized access to personal data' },
+  { value: 'unauthorized_charges', label: 'Unauthorized Charges', description: 'Charges made without consent' },
+  { value: 'other', label: 'Other', description: 'Other incident type' },
 ];
 
 const severityOptions = [
-  { value: 'low', label: 'Low - Minor inconvenience' },
-  { value: 'medium', label: 'Medium - Significant issue' },
-  { value: 'high', label: 'High - Major harm or loss' },
-  { value: 'critical', label: 'Critical - Severe damage or danger' },
+  { value: 'low', label: 'Low', description: 'Minor inconvenience, easily resolved' },
+  { value: 'medium', label: 'Medium', description: 'Moderate impact, some difficulty resolving' },
+  { value: 'high', label: 'High', description: 'Significant harm, financial loss, or difficulty' },
+  { value: 'critical', label: 'Critical', description: 'Severe harm, major financial loss, or safety risk' },
 ];
 
-export function IncidentForm() {
-  const [isSubmitting, setIsSubmitting] = useState(false);
+interface IncidentFormProps {
+  prefilledEntityId?: string;
+  prefilledEntityName?: string;
+  prefilledEntityType?: EntityType;
+  prefilledEntityIdentifier?: string;
+}
+
+export function IncidentForm({
+  prefilledEntityId,
+  prefilledEntityName,
+  prefilledEntityType,
+  prefilledEntityIdentifier,
+}: IncidentFormProps) {
   const navigate = useNavigate();
   const { toast } = useToast();
+  const submitMutation = useSubmitIncident();
 
   const form = useForm<FormData>({
     resolver: zodResolver(formSchema),
     defaultValues: {
-      entityType: 'business',
-      entityName: '',
-      entityIdentifier: '',
+      entityType: prefilledEntityType || 'business',
+      entityName: prefilledEntityName || '',
+      entityIdentifier: prefilledEntityIdentifier || '',
       title: '',
       description: '',
+      whatWasPromised: '',
+      whatActuallyHappened: '',
       category: 'fraud',
       severity: 'medium',
       dateOccurred: '',
@@ -89,39 +107,75 @@ export function IncidentForm() {
     },
   });
 
+  const selectedEntityType = form.watch('entityType');
+  const identifierPlaceholder = entityTypeOptions.find(e => e.value === selectedEntityType)?.placeholder || '';
+
   const onSubmit = async (data: FormData) => {
-    setIsSubmitting(true);
-    
-    // Simulate API call
-    await new Promise(resolve => setTimeout(resolve, 1500));
-    
-    toast({
-      title: 'Report Submitted',
-      description: 'Your incident report has been submitted for review. Thank you for helping keep our community safe.',
-    });
-    
-    setIsSubmitting(false);
-    navigate('/');
+    try {
+      const result = await submitMutation.mutateAsync({
+        entity_id: prefilledEntityId,
+        entity: prefilledEntityId ? undefined : {
+          type: data.entityType,
+          name: data.entityName,
+          identifier: data.entityIdentifier,
+        },
+        title: data.title,
+        description: data.description,
+        what_was_promised: data.whatWasPromised || undefined,
+        what_actually_happened: data.whatActuallyHappened || undefined,
+        category: data.category,
+        severity: data.severity,
+        date_occurred: data.dateOccurred,
+        location: data.location || undefined,
+      });
+
+      toast({
+        title: 'Report Submitted',
+        description: 'Your incident report has been submitted and is pending review.',
+      });
+
+      navigate(`/entity/${result.entity_id}`);
+    } catch (error) {
+      toast({
+        title: 'Submission Failed',
+        description: error instanceof Error ? error.message : 'An unexpected error occurred',
+        variant: 'destructive',
+      });
+    }
   };
 
   return (
     <Card className="max-w-2xl mx-auto">
-      <CardHeader>
-        <div className="flex items-center gap-2 mb-2">
-          <AlertTriangle className="h-5 w-5 text-primary" />
-          <CardTitle>Report an Incident</CardTitle>
+      <CardHeader className="pb-4">
+        <div className="flex items-center gap-3 mb-2">
+          <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-primary/10">
+            <FileText className="h-5 w-5 text-primary" />
+          </div>
+          <div>
+            <CardTitle className="text-xl">Submit an Incident Report</CardTitle>
+            <CardDescription>
+              Help others by documenting your experience
+            </CardDescription>
+          </div>
         </div>
-        <CardDescription>
-          Help others by reporting your experience. All submissions are anonymous and will be reviewed before publication.
-        </CardDescription>
       </CardHeader>
       
       <CardContent>
+        <Alert className="mb-6 border-primary/20 bg-primary/5">
+          <AlertTriangle className="h-4 w-4 text-primary" />
+          <AlertDescription className="text-sm">
+            Please provide factual, accurate information. Reports are reviewed before publication. 
+            False reports may be removed.
+          </AlertDescription>
+        </Alert>
+
         <Form {...form}>
-          <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-6">
+          <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-8">
             {/* Entity Information */}
             <div className="space-y-4">
-              <h3 className="font-medium text-foreground">Who or what is this about?</h3>
+              <h3 className="text-sm font-medium text-foreground uppercase tracking-wide">
+                Subject of Report
+              </h3>
               
               <FormField
                 control={form.control}
@@ -129,7 +183,11 @@ export function IncidentForm() {
                 render={({ field }) => (
                   <FormItem>
                     <FormLabel>Type</FormLabel>
-                    <Select onValueChange={field.onChange} defaultValue={field.value}>
+                    <Select 
+                      onValueChange={field.onChange} 
+                      defaultValue={field.value}
+                      disabled={!!prefilledEntityId}
+                    >
                       <FormControl>
                         <SelectTrigger>
                           <SelectValue placeholder="Select type" />
@@ -156,7 +214,11 @@ export function IncidentForm() {
                     <FormItem>
                       <FormLabel>Name</FormLabel>
                       <FormControl>
-                        <Input placeholder="e.g., QuickLoans Pro" {...field} />
+                        <Input 
+                          placeholder="Name of person, business, or service" 
+                          {...field} 
+                          disabled={!!prefilledEntityId}
+                        />
                       </FormControl>
                       <FormMessage />
                     </FormItem>
@@ -170,11 +232,12 @@ export function IncidentForm() {
                     <FormItem>
                       <FormLabel>Identifier</FormLabel>
                       <FormControl>
-                        <Input placeholder="Phone, website, address..." {...field} />
+                        <Input 
+                          placeholder={identifierPlaceholder} 
+                          {...field} 
+                          disabled={!!prefilledEntityId}
+                        />
                       </FormControl>
-                      <FormDescription>
-                        Phone number, website URL, or other identifying info
-                      </FormDescription>
                       <FormMessage />
                     </FormItem>
                   )}
@@ -184,17 +247,25 @@ export function IncidentForm() {
             
             {/* Incident Details */}
             <div className="space-y-4">
-              <h3 className="font-medium text-foreground">What happened?</h3>
+              <h3 className="text-sm font-medium text-foreground uppercase tracking-wide">
+                Incident Details
+              </h3>
               
               <FormField
                 control={form.control}
                 name="title"
                 render={({ field }) => (
                   <FormItem>
-                    <FormLabel>Incident Title</FormLabel>
+                    <FormLabel>Summary</FormLabel>
                     <FormControl>
-                      <Input placeholder="Brief summary of the incident" {...field} />
+                      <Input 
+                        placeholder="Brief, factual summary of the incident" 
+                        {...field} 
+                      />
                     </FormControl>
+                    <FormDescription>
+                      A clear, objective title (10-200 characters)
+                    </FormDescription>
                     <FormMessage />
                   </FormItem>
                 )}
@@ -205,21 +276,59 @@ export function IncidentForm() {
                 name="description"
                 render={({ field }) => (
                   <FormItem>
-                    <FormLabel>Description</FormLabel>
+                    <FormLabel>Full Description</FormLabel>
                     <FormControl>
                       <Textarea 
-                        placeholder="Provide a detailed, factual account of what happened..."
-                        className="min-h-[120px]"
+                        placeholder="Provide a detailed, factual account of what occurred..."
+                        className="min-h-[120px] resize-y"
                         {...field} 
                       />
                     </FormControl>
                     <FormDescription>
-                      Be specific and factual. Avoid assumptions or personal opinions.
+                      Include dates, amounts, and specific details. Avoid assumptions.
                     </FormDescription>
                     <FormMessage />
                   </FormItem>
                 )}
               />
+
+              <div className="grid gap-4 sm:grid-cols-2">
+                <FormField
+                  control={form.control}
+                  name="whatWasPromised"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>What was promised? (Optional)</FormLabel>
+                      <FormControl>
+                        <Textarea 
+                          placeholder="Describe expectations or promises made..."
+                          className="min-h-[80px] resize-y"
+                          {...field} 
+                        />
+                      </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+                
+                <FormField
+                  control={form.control}
+                  name="whatActuallyHappened"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>What actually happened? (Optional)</FormLabel>
+                      <FormControl>
+                        <Textarea 
+                          placeholder="Describe the actual outcome..."
+                          className="min-h-[80px] resize-y"
+                          {...field} 
+                        />
+                      </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+              </div>
               
               <div className="grid gap-4 sm:grid-cols-2">
                 <FormField
@@ -237,7 +346,9 @@ export function IncidentForm() {
                         <SelectContent>
                           {categoryOptions.map(option => (
                             <SelectItem key={option.value} value={option.value}>
-                              {option.label}
+                              <div>
+                                <span>{option.label}</span>
+                              </div>
                             </SelectItem>
                           ))}
                         </SelectContent>
@@ -279,9 +390,9 @@ export function IncidentForm() {
                   name="dateOccurred"
                   render={({ field }) => (
                     <FormItem>
-                      <FormLabel>When did this occur?</FormLabel>
+                      <FormLabel>Date of Incident</FormLabel>
                       <FormControl>
-                        <Input type="date" {...field} />
+                        <Input type="date" max={new Date().toISOString().split('T')[0]} {...field} />
                       </FormControl>
                       <FormMessage />
                     </FormItem>
@@ -295,7 +406,7 @@ export function IncidentForm() {
                     <FormItem>
                       <FormLabel>Location (Optional)</FormLabel>
                       <FormControl>
-                        <Input placeholder="City, State or Online" {...field} />
+                        <Input placeholder="City, State or 'Online'" {...field} />
                       </FormControl>
                       <FormMessage />
                     </FormItem>
@@ -304,8 +415,13 @@ export function IncidentForm() {
               </div>
             </div>
             
-            <Button type="submit" className="w-full" disabled={isSubmitting}>
-              {isSubmitting ? (
+            <Button 
+              type="submit" 
+              className="w-full" 
+              size="lg"
+              disabled={submitMutation.isPending}
+            >
+              {submitMutation.isPending ? (
                 'Submitting...'
               ) : (
                 <>
