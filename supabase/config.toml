@@ -1,1 +1,31 @@
 project_id = "owwnlvnuaokshpkgfddv"
+
+[functions.search-entities]
+verify_jwt = false
+
+[functions.create-entity]
+verify_jwt = false
+
+[functions.submit-incident]
+verify_jwt = false
+
+[functions.get-entity]
+verify_jwt = false
+
+[functions.get-risk-score]
+verify_jwt = false
+
+[functions.flag-incident]
+verify_jwt = false
+
+[functions.ai-categorize-incident]
+verify_jwt = false
+
+[functions.ai-detect-duplicates]
+verify_jwt = false
+
+[functions.ai-generate-summary]
+verify_jwt = false
+
+[functions.ai-calculate-risk]
+verify_jwt = false

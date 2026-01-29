@@ -221,3 +221,155 @@ export async function flagIncident(data: FlagIncidentRequest): Promise<{ success
 
   return response.json();
 }
+
+// AI-Assisted API Functions
+
+export interface CategorizationResult {
+  primary_category: string;
+  secondary_category: string | null;
+  confidence: number;
+  explanation: string;
+  indicators: string[];
+  processing_note: string;
+}
+
+export async function categorizeIncident(data: {
+  title: string;
+  description: string;
+  what_was_promised?: string;
+  what_actually_happened?: string;
+}): Promise<CategorizationResult> {
+  const response = await fetch(`${FUNCTIONS_URL}/ai-categorize-incident`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'apikey': SUPABASE_KEY,
+    },
+    body: JSON.stringify(data),
+  });
+
+  if (!response.ok) {
+    const errorData = await response.json();
+    throw new Error(errorData.error || 'Failed to categorize incident');
+  }
+
+  return response.json();
+}
+
+export interface DuplicateResult {
+  has_duplicates: boolean;
+  has_similar: boolean;
+  duplicates: Array<{
+    incident_id: string;
+    similarity_score: number;
+    matching_elements: string[];
+    explanation: string;
+  }>;
+  similar: Array<{
+    incident_id: string;
+    similarity_score: number;
+    matching_elements: string[];
+    distinguishing_elements: string[];
+  }>;
+  recommendation: string;
+  processing_note: string;
+}
+
+export async function detectDuplicates(data: {
+  entity_id: string;
+  new_incident: {
+    title: string;
+    description: string;
+    date_occurred: string;
+    category: string;
+  };
+}): Promise<DuplicateResult> {
+  const response = await fetch(`${FUNCTIONS_URL}/ai-detect-duplicates`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'apikey': SUPABASE_KEY,
+    },
+    body: JSON.stringify(data),
+  });
+
+  if (!response.ok) {
+    const errorData = await response.json();
+    throw new Error(errorData.error || 'Failed to detect duplicates');
+  }
+
+  return response.json();
+}
+
+export interface PatternSummary {
+  summary: string;
+  key_patterns: Array<{
+    pattern: string;
+    frequency: string;
+    description: string;
+  }>;
+  temporal_analysis: {
+    earliest: string;
+    latest: string;
+    peak_period: string;
+    trend?: string;
+  } | null;
+  category_distribution: Record<string, number>;
+  data_quality: {
+    total_reports: number;
+    verified_count: number;
+    confidence_note: string;
+  };
+  disclaimer: string;
+}
+
+export async function generateSummary(entityId: string): Promise<PatternSummary> {
+  const response = await fetch(`${FUNCTIONS_URL}/ai-generate-summary`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'apikey': SUPABASE_KEY,
+    },
+    body: JSON.stringify({ entity_id: entityId }),
+  });
+
+  if (!response.ok) {
+    const errorData = await response.json();
+    throw new Error(errorData.error || 'Failed to generate summary');
+  }
+
+  return response.json();
+}
+
+export interface ExplainableRiskScore {
+  entity_id: string;
+  risk_score: number;
+  risk_level: string;
+  factors: {
+    frequency: { raw: number; weighted: number; explanation: string };
+    severity: { raw: number; weighted: number; explanation: string };
+    recency: { raw: number; weighted: number; explanation: string };
+    verification: { raw: number; weighted: number; explanation: string };
+  };
+  algorithm_version: string;
+  calculated_at: string;
+  disclaimer: string;
+}
+
+export async function calculateRisk(entityId: string): Promise<ExplainableRiskScore> {
+  const response = await fetch(`${FUNCTIONS_URL}/ai-calculate-risk`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'apikey': SUPABASE_KEY,
+    },
+    body: JSON.stringify({ entity_id: entityId }),
+  });
+
+  if (!response.ok) {
+    const errorData = await response.json();
+    throw new Error(errorData.error || 'Failed to calculate risk');
+  }
+
+  return response.json();
+}
