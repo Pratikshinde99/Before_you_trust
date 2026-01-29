@@ -1,8 +1,9 @@
+import { forwardRef } from 'react';
 import { Shield } from 'lucide-react';
 
-export function Footer() {
+export const Footer = forwardRef<HTMLElement>(function Footer(_, ref) {
   return (
-    <footer className="border-t border-border bg-card">
+    <footer ref={ref} className="border-t border-border bg-card">
       <div className="container py-8">
         <div className="flex flex-col items-center justify-between gap-4 md:flex-row">
           <div className="flex items-center gap-2">
@@ -23,4 +24,4 @@ export function Footer() {
       </div>
     </footer>
   );
-}
+});
