@@ -181,6 +181,10 @@ serve(async (req) => {
     const hashArray = Array.from(new Uint8Array(hashBuffer));
     const ipHash = hashArray.map(b => b.toString(16).padStart(2, '0')).join('').slice(0, 16);
 
+    // Calculate initial confidence based on details provided
+    const hasDetails = !!(what_was_promised?.trim() || what_actually_happened?.trim());
+    const initialConfidence = hasDetails ? 20 : 10; // Base confidence
+
     // Create incident report
     const { data: incident, error: incidentError } = await supabase
       .from('incident_reports')
@@ -195,9 +199,11 @@ serve(async (req) => {
         date_occurred,
         location: location?.trim() || null,
         submitter_ip_hash: ipHash,
-        status: 'pending'
+        status: 'pending',
+        verification_confidence: initialConfidence,
+        evidence_count: 0
       })
-      .select('id, entity_id, title, status, created_at')
+      .select('id, entity_id, title, status, created_at, verification_confidence')
       .single();
 
     if (incidentError) {
@@ -208,28 +214,10 @@ serve(async (req) => {
       );
     }
 
-    // Add evidence if provided
-    if (evidence && Array.isArray(evidence) && evidence.length > 0) {
-      const evidenceRecords = evidence.slice(0, 10).map((e: any) => ({
-        incident_id: incident.id,
-        file_url: e.file_url,
-        file_type: e.file_type || 'document',
-        file_name: e.file_name || null,
-        file_size_bytes: e.file_size_bytes || null,
-        mime_type: e.mime_type || null
-      }));
+    console.log(`Incident submitted: ${incident.id} for entity ${resolvedEntityId} (confidence: ${initialConfidence})`);
 
-      const { error: evidenceError } = await supabase
-        .from('incident_evidence')
-        .insert(evidenceRecords);
-
-      if (evidenceError) {
-        console.error('Add evidence error:', evidenceError);
-        // Don't fail the whole request, just log it
-      }
-    }
-
-    console.log(`Incident submitted: ${incident.id} for entity ${resolvedEntityId}`);
+    // Note: Evidence should be uploaded separately using /upload-evidence endpoint
+    // This ensures proper file handling and security
 
     return new Response(
       JSON.stringify(incident),

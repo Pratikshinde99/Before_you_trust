@@ -29,3 +29,6 @@ verify_jwt = false
 
 [functions.ai-calculate-risk]
 verify_jwt = false
+
+[functions.upload-evidence]
+verify_jwt = false

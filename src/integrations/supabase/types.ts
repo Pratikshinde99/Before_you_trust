@@ -139,6 +139,7 @@ export type Database = {
           date_occurred: string
           description: string
           entity_id: string
+          evidence_count: number | null
           id: string
           location: string | null
           severity: Database["public"]["Enums"]["severity_level"]
@@ -157,6 +158,7 @@ export type Database = {
           date_occurred: string
           description: string
           entity_id: string
+          evidence_count?: number | null
           id?: string
           location?: string | null
           severity?: Database["public"]["Enums"]["severity_level"]
@@ -175,6 +177,7 @@ export type Database = {
           date_occurred?: string
           description?: string
           entity_id?: string
+          evidence_count?: number | null
           id?: string
           location?: string | null
           severity?: Database["public"]["Enums"]["severity_level"]
@@ -202,7 +205,10 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
-      [_ in never]: never
+      calculate_verification_confidence: {
+        Args: { p_incident_id: string }
+        Returns: number
+      }
     }
     Enums: {
       entity_type: "person" | "business" | "phone" | "website" | "service"
