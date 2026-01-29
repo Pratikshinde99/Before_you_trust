@@ -200,6 +200,27 @@ export type Database = {
           },
         ]
       }
+      submission_rate_limits: {
+        Row: {
+          action_type: string
+          created_at: string
+          id: string
+          ip_hash: string
+        }
+        Insert: {
+          action_type: string
+          created_at?: string
+          id?: string
+          ip_hash: string
+        }
+        Update: {
+          action_type?: string
+          created_at?: string
+          id?: string
+          ip_hash?: string
+        }
+        Relationships: []
+      }
     }
     Views: {
       [_ in never]: never
@@ -209,6 +230,7 @@ export type Database = {
         Args: { p_incident_id: string }
         Returns: number
       }
+      cleanup_rate_limits: { Args: never; Returns: number }
     }
     Enums: {
       entity_type: "person" | "business" | "phone" | "website" | "service"

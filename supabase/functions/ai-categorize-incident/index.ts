@@ -1,4 +1,5 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -37,33 +38,62 @@ Analyze the incident and provide:
 4. Brief explanation of categorization logic (neutral, factual)
 5. Key indicators that led to this categorization`;
 
+// Rate limit configuration
+const AI_RATE_LIMIT = 30; // Max 30 AI calls per hour per IP
+
+async function hashIp(ip: string): Promise<string> {
+  const encoder = new TextEncoder();
+  const data = encoder.encode(ip + Deno.env.get('SUPABASE_SERVICE_ROLE_KEY'));
+  const hashBuffer = await crypto.subtle.digest('SHA-256', data);
+  const hashArray = Array.from(new Uint8Array(hashBuffer));
+  return hashArray.map(b => b.toString(16).padStart(2, '0')).join('').slice(0, 16);
+}
+
+function getClientIp(req: Request): string {
+  return req.headers.get('x-forwarded-for')?.split(',')[0]?.trim() || 
+         req.headers.get('cf-connecting-ip') || 
+         req.headers.get('x-real-ip') ||
+         'unknown';
+}
+
 /**
  * POST /ai-categorize-incident
  * 
  * Categorizes an incident into standardized types using AI
- * 
- * Request body: {
- *   title: string,
- *   description: string,
- *   what_was_promised?: string,
- *   what_actually_happened?: string
- * }
- * 
- * Response: {
- *   primary_category: string,
- *   secondary_category: string | null,
- *   confidence: number (0-100),
- *   explanation: string,
- *   indicators: string[],
- *   processing_note: string
- * }
+ * Rate limited to prevent abuse of AI credits.
  */
 serve(async (req) => {
   if (req.method === 'OPTIONS') {
     return new Response('ok', { headers: corsHeaders });
   }
 
+  // Service role client for rate limiting
+  const supabaseAdmin = createClient(
+    Deno.env.get('SUPABASE_URL')!,
+    Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
+  );
+
   try {
+    // Rate limiting check
+    const clientIp = getClientIp(req);
+    const ipHash = await hashIp(clientIp);
+    const windowStart = new Date(Date.now() - 60 * 60 * 1000);
+
+    const { count } = await supabaseAdmin
+      .from('submission_rate_limits')
+      .select('*', { count: 'exact', head: true })
+      .eq('ip_hash', ipHash)
+      .eq('action_type', 'ai_call')
+      .gte('created_at', windowStart.toISOString());
+
+    if ((count || 0) >= AI_RATE_LIMIT) {
+      console.log(`AI rate limit exceeded for IP hash ${ipHash}`);
+      return new Response(
+        JSON.stringify({ error: 'Rate limit exceeded. Please try again later.' }),
+        { status: 429, headers: { ...corsHeaders, 'Content-Type': 'application/json', 'Retry-After': '3600' } }
+      );
+    }
+
     const { title, description, what_was_promised, what_actually_happened } = await req.json();
 
     if (!title || !description) {
@@ -80,6 +110,11 @@ serve(async (req) => {
         { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
+
+    // Record rate limit event
+    await supabaseAdmin
+      .from('submission_rate_limits')
+      .insert({ ip_hash: ipHash, action_type: 'ai_call' });
 
     const userPrompt = `Please categorize this incident:
 

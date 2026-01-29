@@ -12,15 +12,32 @@ const CATEGORIES = [
   'data_breach', 'unauthorized_charges', 'other'
 ];
 
+// Rate limit configuration
+const RATE_LIMITS = {
+  incident_submission: 10,
+  entity_creation: 20
+};
+
+async function hashIp(ip: string): Promise<string> {
+  const encoder = new TextEncoder();
+  const data = encoder.encode(ip + Deno.env.get('SUPABASE_SERVICE_ROLE_KEY'));
+  const hashBuffer = await crypto.subtle.digest('SHA-256', data);
+  const hashArray = Array.from(new Uint8Array(hashBuffer));
+  return hashArray.map(b => b.toString(16).padStart(2, '0')).join('').slice(0, 16);
+}
+
+function getClientIp(req: Request): string {
+  return req.headers.get('x-forwarded-for')?.split(',')[0]?.trim() || 
+         req.headers.get('cf-connecting-ip') || 
+         req.headers.get('x-real-ip') ||
+         'unknown';
+}
+
 /**
  * POST /submit-incident
  * 
- * Submit a new incident report with AI-assisted categorization and duplicate detection
- * 
- * Response includes:
- * - ai_category: AI-suggested category (if different from submitted)
- * - similar_incidents: Array of similar incidents found
- * - similarity_warning: Boolean indicating if similar incidents exist
+ * Submit a new incident report with rate limiting and AI-assisted processing.
+ * Uses service role for database operations to ensure proper RLS enforcement.
  */
 serve(async (req) => {
   if (req.method === 'OPTIONS') {
@@ -34,7 +51,43 @@ serve(async (req) => {
     );
   }
 
+  // Use service role for all database operations
+  const supabaseAdmin = createClient(
+    Deno.env.get('SUPABASE_URL')!,
+    Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
+  );
+
   try {
+    // Rate limiting check
+    const clientIp = getClientIp(req);
+    const ipHash = await hashIp(clientIp);
+    const windowStart = new Date(Date.now() - 60 * 60 * 1000); // 1 hour ago
+
+    const { count: submissionCount } = await supabaseAdmin
+      .from('submission_rate_limits')
+      .select('*', { count: 'exact', head: true })
+      .eq('ip_hash', ipHash)
+      .eq('action_type', 'incident_submission')
+      .gte('created_at', windowStart.toISOString());
+
+    if ((submissionCount || 0) >= RATE_LIMITS.incident_submission) {
+      console.log(`Rate limit exceeded for IP hash ${ipHash}`);
+      return new Response(
+        JSON.stringify({ 
+          error: 'Too many submissions. Please try again later.',
+          retry_after_seconds: 3600 
+        }),
+        { 
+          status: 429, 
+          headers: { 
+            ...corsHeaders, 
+            'Content-Type': 'application/json',
+            'Retry-After': '3600'
+          } 
+        }
+      );
+    }
+
     const body = await req.json();
     const {
       entity_id,
@@ -88,15 +141,25 @@ serve(async (req) => {
       );
     }
 
-    const supabase = createClient(
-      Deno.env.get('SUPABASE_URL')!,
-      Deno.env.get('SUPABASE_ANON_KEY')!
-    );
-
     let resolvedEntityId = entity_id;
 
-    // Create entity if not provided
+    // Create entity if not provided (also rate limited)
     if (!entity_id && entity) {
+      // Check entity creation rate limit
+      const { count: entityCount } = await supabaseAdmin
+        .from('submission_rate_limits')
+        .select('*', { count: 'exact', head: true })
+        .eq('ip_hash', ipHash)
+        .eq('action_type', 'entity_creation')
+        .gte('created_at', windowStart.toISOString());
+
+      if ((entityCount || 0) >= RATE_LIMITS.entity_creation) {
+        return new Response(
+          JSON.stringify({ error: 'Too many entity creations. Please try again later.' }),
+          { status: 429, headers: { ...corsHeaders, 'Content-Type': 'application/json', 'Retry-After': '3600' } }
+        );
+      }
+
       const { type, name, identifier } = entity;
       const validTypes = ['person', 'business', 'phone', 'website', 'service'];
 
@@ -116,8 +179,8 @@ serve(async (req) => {
 
       const normalizedIdentifier = identifier.toLowerCase().trim().replace(/\s+/g, '');
 
-      // Check if exists
-      const { data: existing } = await supabase
+      // Check if entity exists
+      const { data: existing } = await supabaseAdmin
         .from('entities')
         .select('id')
         .eq('type', type)
@@ -127,7 +190,12 @@ serve(async (req) => {
       if (existing) {
         resolvedEntityId = existing.id;
       } else {
-        const { data: newEntity, error: entityError } = await supabase
+        // Record entity creation for rate limiting
+        await supabaseAdmin
+          .from('submission_rate_limits')
+          .insert({ ip_hash: ipHash, action_type: 'entity_creation' });
+
+        const { data: newEntity, error: entityError } = await supabaseAdmin
           .from('entities')
           .insert({
             type,
@@ -157,20 +225,17 @@ serve(async (req) => {
       );
     }
 
-    // Hash IP for abuse prevention
-    const clientIp = req.headers.get('x-forwarded-for') || req.headers.get('cf-connecting-ip') || 'unknown';
-    const encoder = new TextEncoder();
-    const data = encoder.encode(clientIp + Deno.env.get('SUPABASE_SERVICE_ROLE_KEY'));
-    const hashBuffer = await crypto.subtle.digest('SHA-256', data);
-    const hashArray = Array.from(new Uint8Array(hashBuffer));
-    const ipHash = hashArray.map(b => b.toString(16).padStart(2, '0')).join('').slice(0, 16);
+    // Record rate limit event for incident submission
+    await supabaseAdmin
+      .from('submission_rate_limits')
+      .insert({ ip_hash: ipHash, action_type: 'incident_submission' });
 
     // Calculate initial confidence based on details provided
     const hasDetails = !!(what_was_promised?.trim() || what_actually_happened?.trim());
     const initialConfidence = hasDetails ? 20 : 10;
 
-    // Create incident report first
-    const { data: incident, error: incidentError } = await supabase
+    // Create incident report using service role
+    const { data: incident, error: incidentError } = await supabaseAdmin
       .from('incident_reports')
       .insert({
         entity_id: resolvedEntityId,
@@ -198,7 +263,7 @@ serve(async (req) => {
       );
     }
 
-    console.log(`Incident submitted: ${incident.id} for entity ${resolvedEntityId}`);
+    console.log(`Incident submitted: ${incident.id} for entity ${resolvedEntityId} (IP hash: ${ipHash})`);
 
     // AI Processing (non-blocking - run in parallel)
     let aiCategory: { primary_category: string; confidence: number; explanation: string } | null = null;
@@ -260,10 +325,9 @@ Categories: ${CATEGORIES.join(', ')}`
             return JSON.parse(toolCall.function.arguments);
           })(),
 
-          // Duplicate Detection
+          // Duplicate Detection - use service role to read all incidents
           (async () => {
-            // First, get existing incidents for this entity
-            const { data: existingIncidents } = await supabase
+            const { data: existingIncidents } = await supabaseAdmin
               .from('incident_reports')
               .select('id, title, description, category, date_occurred')
               .eq('entity_id', resolvedEntityId)
@@ -337,7 +401,6 @@ ${existingIncidents.map((inc, i) => `[${i}] ID: ${inc.id}\nTitle: ${inc.title}\n
             
             const result = JSON.parse(toolCall.function.arguments);
             
-            // Enrich with titles from existing incidents
             return {
               similar: (result.similar || []).map((s: { incident_id: string; similarity_score: number }) => {
                 const matching = existingIncidents.find(inc => inc.id === s.incident_id);
@@ -345,7 +408,7 @@ ${existingIncidents.map((inc, i) => `[${i}] ID: ${inc.id}\nTitle: ${inc.title}\n
                   ...s,
                   title: matching?.title || 'Unknown'
                 };
-              }).filter((s: { similarity_score: number }) => s.similarity_score >= 50) // Only include if >= 50% similar
+              }).filter((s: { similarity_score: number }) => s.similarity_score >= 50)
             };
           })()
         ]);
@@ -365,14 +428,11 @@ ${existingIncidents.map((inc, i) => `[${i}] ID: ${inc.id}\nTitle: ${inc.title}\n
           if (similarityWarning) {
             console.log(`Found ${similarIncidents.length} similar incidents for ${incident.id}`);
             
-            // Store similarity scores in database (as metadata on the incident)
-            // We'll update the incident with AI metadata
             const highestSimilarity = Math.max(...similarIncidents.map(s => s.similarity_score), 0);
             
-            await supabase
+            await supabaseAdmin
               .from('incident_reports')
               .update({
-                // Store highest similarity score - this can be used for review prioritization
                 verification_confidence: Math.max(initialConfidence - Math.floor(highestSimilarity / 10), 5)
               })
               .eq('id', incident.id);
@@ -380,7 +440,6 @@ ${existingIncidents.map((inc, i) => `[${i}] ID: ${inc.id}\nTitle: ${inc.title}\n
         }
       } catch (aiError) {
         console.error('AI processing error (non-blocking):', aiError);
-        // AI failures don't block submission
       }
     }
 

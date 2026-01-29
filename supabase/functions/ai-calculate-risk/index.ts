@@ -47,15 +47,31 @@ const SEVERITY_WEIGHTS = {
   critical: 4
 };
 
-const FREQUENCY_THRESHOLD = 10; // incidents for max frequency score
-const RECENCY_HALF_LIFE_DAYS = 90; // days for half decay
+const FREQUENCY_THRESHOLD = 10;
+const RECENCY_HALF_LIFE_DAYS = 90;
+
+// Rate limit configuration
+const AI_RATE_LIMIT = 30;
+
+async function hashIp(ip: string): Promise<string> {
+  const encoder = new TextEncoder();
+  const data = encoder.encode(ip + Deno.env.get('SUPABASE_SERVICE_ROLE_KEY'));
+  const hashBuffer = await crypto.subtle.digest('SHA-256', data);
+  const hashArray = Array.from(new Uint8Array(hashBuffer));
+  return hashArray.map(b => b.toString(16).padStart(2, '0')).join('').slice(0, 16);
+}
+
+function getClientIp(req: Request): string {
+  return req.headers.get('x-forwarded-for')?.split(',')[0]?.trim() || 
+         req.headers.get('cf-connecting-ip') || 
+         req.headers.get('x-real-ip') ||
+         'unknown';
+}
 
 function calculateRecencyWeight(dateOccurred: string): number {
   const incidentDate = new Date(dateOccurred);
   const now = new Date();
   const daysDiff = (now.getTime() - incidentDate.getTime()) / (1000 * 60 * 60 * 24);
-  
-  // Exponential decay with half-life
   return Math.pow(0.5, daysDiff / RECENCY_HALF_LIFE_DAYS);
 }
 
@@ -108,7 +124,7 @@ function calculateRiskScore(incidents: Incident[]): {
   // 2. SEVERITY FACTOR (35% weight)
   const severitySum = incidents.reduce((sum, inc) => 
     sum + (SEVERITY_WEIGHTS[inc.severity] || 1), 0);
-  const maxPossibleSeverity = totalIncidents * 4; // all critical
+  const maxPossibleSeverity = totalIncidents * 4;
   const severityRaw = severitySum / maxPossibleSeverity;
   const severityWeighted = severityRaw * 35;
   
@@ -160,33 +176,39 @@ function calculateRiskScore(incidents: Incident[]): {
 /**
  * POST /ai-calculate-risk
  * 
- * Calculates risk indicator with explainable logic
- * 
- * Request body: {
- *   entity_id: string
- * }
- * 
- * Response: {
- *   entity_id: string,
- *   risk_score: number (0-100),
- *   risk_level: "unknown" | "low" | "moderate" | "high" | "critical",
- *   factors: {
- *     frequency: { raw, weighted, explanation },
- *     severity: { raw, weighted, explanation },
- *     recency: { raw, weighted, explanation },
- *     verification: { raw, weighted, explanation }
- *   },
- *   algorithm_version: string,
- *   calculated_at: string,
- *   disclaimer: string
- * }
+ * Calculates risk indicator with explainable logic. Rate limited to prevent abuse.
  */
 serve(async (req) => {
   if (req.method === 'OPTIONS') {
     return new Response('ok', { headers: corsHeaders });
   }
 
+  const supabaseAdmin = createClient(
+    Deno.env.get('SUPABASE_URL')!,
+    Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
+  );
+
   try {
+    // Rate limiting check
+    const clientIp = getClientIp(req);
+    const ipHash = await hashIp(clientIp);
+    const windowStart = new Date(Date.now() - 60 * 60 * 1000);
+
+    const { count } = await supabaseAdmin
+      .from('submission_rate_limits')
+      .select('*', { count: 'exact', head: true })
+      .eq('ip_hash', ipHash)
+      .eq('action_type', 'ai_call')
+      .gte('created_at', windowStart.toISOString());
+
+    if ((count || 0) >= AI_RATE_LIMIT) {
+      console.log(`Rate limit exceeded for IP hash ${ipHash}`);
+      return new Response(
+        JSON.stringify({ error: 'Rate limit exceeded. Please try again later.' }),
+        { status: 429, headers: { ...corsHeaders, 'Content-Type': 'application/json', 'Retry-After': '3600' } }
+      );
+    }
+
     const { entity_id } = await req.json();
 
     if (!entity_id) {
@@ -196,13 +218,8 @@ serve(async (req) => {
       );
     }
 
-    const supabase = createClient(
-      Deno.env.get('SUPABASE_URL')!,
-      Deno.env.get('SUPABASE_ANON_KEY')!
-    );
-
-    // Check entity exists
-    const { data: entity, error: entityError } = await supabase
+    // Check entity exists using service role
+    const { data: entity, error: entityError } = await supabaseAdmin
       .from('entities')
       .select('id, name')
       .eq('id', entity_id)
@@ -215,8 +232,13 @@ serve(async (req) => {
       );
     }
 
-    // Fetch all incidents for this entity
-    const { data: incidents, error: incidentsError } = await supabase
+    // Record rate limit event (after validation)
+    await supabaseAdmin
+      .from('submission_rate_limits')
+      .insert({ ip_hash: ipHash, action_type: 'ai_call' });
+
+    // Fetch all incidents for this entity using service role
+    const { data: incidents, error: incidentsError } = await supabaseAdmin
       .from('incident_reports')
       .select('severity, status, date_occurred')
       .eq('entity_id', entity_id)
@@ -233,13 +255,13 @@ serve(async (req) => {
     // Calculate risk score with explainable factors
     const riskResult = calculateRiskScore(incidents || []);
 
-    // Update stored risk score
+    // Update stored risk score using service role
     const verifiedCount = (incidents || []).filter(i => i.status === 'verified').length;
     const lastIncident = incidents && incidents.length > 0 
       ? incidents.sort((a, b) => new Date(b.date_occurred).getTime() - new Date(a.date_occurred).getTime())[0]
       : null;
 
-    await supabase
+    await supabaseAdmin
       .from('entity_risk_scores')
       .upsert({
         entity_id,
