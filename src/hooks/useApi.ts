@@ -5,11 +5,19 @@ import {
   getRiskScore,
   submitIncident,
   flagIncident,
+  categorizeIncident,
+  detectDuplicates,
+  generateSummary,
+  calculateRisk,
   SearchResponse,
   EntityDetailResponse,
   RiskScoreResponse,
   SubmitIncidentRequest,
   FlagIncidentRequest,
+  CategorizationResult,
+  DuplicateResult,
+  PatternSummary,
+  ExplainableRiskScore,
 } from '@/lib/api';
 import { EntityType } from '@/types';
 
@@ -62,5 +70,50 @@ export function useFlagIncident() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['entity'] });
     },
+  });
+}
+
+// AI-Assisted Hooks
+
+export function useCategorizeIncident() {
+  return useMutation<CategorizationResult, Error, {
+    title: string;
+    description: string;
+    what_was_promised?: string;
+    what_actually_happened?: string;
+  }>({
+    mutationFn: (data) => categorizeIncident(data),
+  });
+}
+
+export function useDetectDuplicates() {
+  return useMutation<DuplicateResult, Error, {
+    entity_id: string;
+    new_incident: {
+      title: string;
+      description: string;
+      date_occurred: string;
+      category: string;
+    };
+  }>({
+    mutationFn: (data) => detectDuplicates(data),
+  });
+}
+
+export function useGenerateSummary(entityId: string | undefined) {
+  return useQuery<PatternSummary>({
+    queryKey: ['ai-summary', entityId],
+    queryFn: () => generateSummary(entityId!),
+    enabled: !!entityId,
+    staleTime: 300000, // 5 minutes - AI summaries don't change often
+  });
+}
+
+export function useCalculateRisk(entityId: string | undefined) {
+  return useQuery<ExplainableRiskScore>({
+    queryKey: ['ai-risk', entityId],
+    queryFn: () => calculateRisk(entityId!),
+    enabled: !!entityId,
+    staleTime: 120000, // 2 minutes
   });
 }
