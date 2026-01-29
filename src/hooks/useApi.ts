@@ -13,6 +13,7 @@ import {
   EntityDetailResponse,
   RiskScoreResponse,
   SubmitIncidentRequest,
+  SubmitIncidentResponse,
   FlagIncidentRequest,
   CategorizationResult,
   DuplicateResult,
@@ -51,7 +52,7 @@ export function useRiskScore(entityId: string | undefined) {
 export function useSubmitIncident() {
   const queryClient = useQueryClient();
   
-  return useMutation({
+  return useMutation<SubmitIncidentResponse, Error, SubmitIncidentRequest>({
     mutationFn: (data: SubmitIncidentRequest) => submitIncident(data),
     onSuccess: (result) => {
       // Invalidate related queries

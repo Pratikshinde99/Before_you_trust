@@ -3,35 +3,24 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type, x-supabase-client-platform, x-supabase-client-platform-version, x-supabase-client-runtime, x-supabase-client-runtime-version',
 };
+
+const CATEGORIES = [
+  'fraud', 'scam', 'harassment', 'misrepresentation',
+  'non_delivery', 'quality_issue', 'safety_concern',
+  'data_breach', 'unauthorized_charges', 'other'
+];
 
 /**
  * POST /submit-incident
  * 
- * Submit a new incident report (anonymous allowed)
+ * Submit a new incident report with AI-assisted categorization and duplicate detection
  * 
- * Request Body: {
- *   entity_id: uuid (required if entity exists),
- *   entity: { type, name, identifier } (required if entity_id not provided),
- *   title: string (10-200 chars),
- *   description: string (50-2000 chars),
- *   what_was_promised?: string (max 1000 chars),
- *   what_actually_happened?: string (max 1000 chars),
- *   category: incident_category enum,
- *   severity: "low" | "medium" | "high" | "critical",
- *   date_occurred: "YYYY-MM-DD",
- *   location?: string (max 100 chars),
- *   evidence?: [{ file_url, file_type, file_name?, file_size_bytes?, mime_type? }]
- * }
- * 
- * Response: {
- *   id: uuid,
- *   entity_id: uuid,
- *   title: string,
- *   status: "pending",
- *   created_at: timestamp
- * }
+ * Response includes:
+ * - ai_category: AI-suggested category (if different from submitted)
+ * - similar_incidents: Array of similar incidents found
+ * - similarity_warning: Boolean indicating if similar incidents exist
  */
 serve(async (req) => {
   if (req.method === 'OPTIONS') {
@@ -58,15 +47,10 @@ serve(async (req) => {
       severity,
       date_occurred,
       location,
-      evidence
     } = body;
 
     // Validation
-    const validCategories = [
-      'fraud', 'scam', 'harassment', 'misrepresentation',
-      'non_delivery', 'quality_issue', 'safety_concern',
-      'data_breach', 'unauthorized_charges', 'other'
-    ];
+    const validCategories = CATEGORIES;
     const validSeverities = ['low', 'medium', 'high', 'critical'];
 
     if (!title || typeof title !== 'string' || title.trim().length < 10 || title.trim().length > 200) {
@@ -183,9 +167,9 @@ serve(async (req) => {
 
     // Calculate initial confidence based on details provided
     const hasDetails = !!(what_was_promised?.trim() || what_actually_happened?.trim());
-    const initialConfidence = hasDetails ? 20 : 10; // Base confidence
+    const initialConfidence = hasDetails ? 20 : 10;
 
-    // Create incident report
+    // Create incident report first
     const { data: incident, error: incidentError } = await supabase
       .from('incident_reports')
       .insert({
@@ -214,13 +198,207 @@ serve(async (req) => {
       );
     }
 
-    console.log(`Incident submitted: ${incident.id} for entity ${resolvedEntityId} (confidence: ${initialConfidence})`);
+    console.log(`Incident submitted: ${incident.id} for entity ${resolvedEntityId}`);
 
-    // Note: Evidence should be uploaded separately using /upload-evidence endpoint
-    // This ensures proper file handling and security
+    // AI Processing (non-blocking - run in parallel)
+    let aiCategory: { primary_category: string; confidence: number; explanation: string } | null = null;
+    let similarIncidents: Array<{ incident_id: string; similarity_score: number; title: string }> = [];
+    let similarityWarning = false;
+
+    const LOVABLE_API_KEY = Deno.env.get('LOVABLE_API_KEY');
+    
+    if (LOVABLE_API_KEY) {
+      try {
+        // Run AI categorization and duplicate detection in parallel
+        const [categorizationResult, duplicatesResult] = await Promise.allSettled([
+          // AI Categorization
+          (async () => {
+            const response = await fetch('https://ai.gateway.lovable.dev/v1/chat/completions', {
+              method: 'POST',
+              headers: {
+                'Authorization': `Bearer ${LOVABLE_API_KEY}`,
+                'Content-Type': 'application/json',
+              },
+              body: JSON.stringify({
+                model: 'google/gemini-3-flash-preview',
+                messages: [
+                  {
+                    role: 'system',
+                    content: `You are an incident categorization assistant. Analyze the incident and determine the most appropriate category.
+Categories: ${CATEGORIES.join(', ')}`
+                  },
+                  {
+                    role: 'user',
+                    content: `Title: ${title}\nDescription: ${description}\n${what_was_promised ? `Promised: ${what_was_promised}` : ''}\n${what_actually_happened ? `Happened: ${what_actually_happened}` : ''}`
+                  }
+                ],
+                tools: [{
+                  type: 'function',
+                  function: {
+                    name: 'categorize',
+                    description: 'Categorize the incident',
+                    parameters: {
+                      type: 'object',
+                      properties: {
+                        primary_category: { type: 'string', enum: CATEGORIES },
+                        confidence: { type: 'number', description: '0-100' },
+                        explanation: { type: 'string' }
+                      },
+                      required: ['primary_category', 'confidence', 'explanation'],
+                      additionalProperties: false
+                    }
+                  }
+                }],
+                tool_choice: { type: 'function', function: { name: 'categorize' } }
+              }),
+            });
+            
+            if (!response.ok) return null;
+            const data = await response.json();
+            const toolCall = data.choices?.[0]?.message?.tool_calls?.[0];
+            if (!toolCall?.function?.arguments) return null;
+            return JSON.parse(toolCall.function.arguments);
+          })(),
+
+          // Duplicate Detection
+          (async () => {
+            // First, get existing incidents for this entity
+            const { data: existingIncidents } = await supabase
+              .from('incident_reports')
+              .select('id, title, description, category, date_occurred')
+              .eq('entity_id', resolvedEntityId)
+              .neq('id', incident.id)
+              .limit(20);
+
+            if (!existingIncidents || existingIncidents.length === 0) {
+              return { similar: [] };
+            }
+
+            const response = await fetch('https://ai.gateway.lovable.dev/v1/chat/completions', {
+              method: 'POST',
+              headers: {
+                'Authorization': `Bearer ${LOVABLE_API_KEY}`,
+                'Content-Type': 'application/json',
+              },
+              body: JSON.stringify({
+                model: 'google/gemini-3-flash-preview',
+                messages: [
+                  {
+                    role: 'system',
+                    content: `You are a duplicate detection assistant. Compare the new incident against existing incidents and identify any that are similar or potential duplicates. Be conservative - only flag truly similar incidents.`
+                  },
+                  {
+                    role: 'user',
+                    content: `New Incident:
+Title: ${title}
+Description: ${description}
+Category: ${category}
+Date: ${date_occurred}
+
+Existing Incidents:
+${existingIncidents.map((inc, i) => `[${i}] ID: ${inc.id}\nTitle: ${inc.title}\nDescription: ${inc.description}\nCategory: ${inc.category}\nDate: ${inc.date_occurred}`).join('\n\n')}`
+                  }
+                ],
+                tools: [{
+                  type: 'function',
+                  function: {
+                    name: 'detect_similar',
+                    description: 'Identify similar incidents',
+                    parameters: {
+                      type: 'object',
+                      properties: {
+                        similar: {
+                          type: 'array',
+                          items: {
+                            type: 'object',
+                            properties: {
+                              incident_id: { type: 'string' },
+                              similarity_score: { type: 'number', description: '0-100' },
+                              reason: { type: 'string' }
+                            },
+                            required: ['incident_id', 'similarity_score', 'reason'],
+                            additionalProperties: false
+                          }
+                        }
+                      },
+                      required: ['similar'],
+                      additionalProperties: false
+                    }
+                  }
+                }],
+                tool_choice: { type: 'function', function: { name: 'detect_similar' } }
+              }),
+            });
+
+            if (!response.ok) return { similar: [] };
+            const data = await response.json();
+            const toolCall = data.choices?.[0]?.message?.tool_calls?.[0];
+            if (!toolCall?.function?.arguments) return { similar: [] };
+            
+            const result = JSON.parse(toolCall.function.arguments);
+            
+            // Enrich with titles from existing incidents
+            return {
+              similar: (result.similar || []).map((s: { incident_id: string; similarity_score: number }) => {
+                const matching = existingIncidents.find(inc => inc.id === s.incident_id);
+                return {
+                  ...s,
+                  title: matching?.title || 'Unknown'
+                };
+              }).filter((s: { similarity_score: number }) => s.similarity_score >= 50) // Only include if >= 50% similar
+            };
+          })()
+        ]);
+
+        // Process categorization result
+        if (categorizationResult.status === 'fulfilled' && categorizationResult.value) {
+          const catResult = categorizationResult.value;
+          aiCategory = catResult;
+          console.log(`AI suggested category: ${catResult.primary_category} (user selected: ${category})`);
+        }
+
+        // Process duplicates result
+        if (duplicatesResult.status === 'fulfilled' && duplicatesResult.value) {
+          similarIncidents = duplicatesResult.value.similar || [];
+          similarityWarning = similarIncidents.length > 0;
+          
+          if (similarityWarning) {
+            console.log(`Found ${similarIncidents.length} similar incidents for ${incident.id}`);
+            
+            // Store similarity scores in database (as metadata on the incident)
+            // We'll update the incident with AI metadata
+            const highestSimilarity = Math.max(...similarIncidents.map(s => s.similarity_score), 0);
+            
+            await supabase
+              .from('incident_reports')
+              .update({
+                // Store highest similarity score - this can be used for review prioritization
+                verification_confidence: Math.max(initialConfidence - Math.floor(highestSimilarity / 10), 5)
+              })
+              .eq('id', incident.id);
+          }
+        }
+      } catch (aiError) {
+        console.error('AI processing error (non-blocking):', aiError);
+        // AI failures don't block submission
+      }
+    }
 
     return new Response(
-      JSON.stringify(incident),
+      JSON.stringify({
+        ...incident,
+        ai_category: aiCategory ? {
+          suggested: aiCategory.primary_category,
+          confidence: aiCategory.confidence,
+          explanation: aiCategory.explanation,
+          differs_from_submitted: aiCategory.primary_category !== category
+        } : null,
+        similar_incidents: similarIncidents,
+        similarity_warning: similarityWarning,
+        similarity_message: similarityWarning 
+          ? 'Similar incidents have been reported for this entity. Your report has been submitted and will be reviewed.'
+          : null
+      }),
       { status: 201, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     );
 
