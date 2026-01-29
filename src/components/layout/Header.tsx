@@ -1,6 +1,7 @@
 import { Shield } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
+import { ThemeToggle } from '@/components/ui/theme-toggle';
 
 export function Header() {
   return (
@@ -11,7 +12,7 @@ export function Header() {
           <span className="text-xl font-semibold text-foreground">Before You Trust</span>
         </Link>
         
-        <nav className="flex items-center gap-4">
+        <nav className="flex items-center gap-2">
           <Link to="/">
             <Button variant="ghost" size="sm">
               Search
@@ -22,6 +23,7 @@ export function Header() {
               Report Incident
             </Button>
           </Link>
+          <ThemeToggle />
         </nav>
       </div>
     </header>
