@@ -14,7 +14,189 @@ export type Database = {
   }
   public: {
     Tables: {
-      [_ in never]: never
+      entities: {
+        Row: {
+          created_at: string
+          id: string
+          identifier: string
+          name: string
+          normalized_identifier: string
+          type: Database["public"]["Enums"]["entity_type"]
+          updated_at: string
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          identifier: string
+          name: string
+          normalized_identifier: string
+          type: Database["public"]["Enums"]["entity_type"]
+          updated_at?: string
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          identifier?: string
+          name?: string
+          normalized_identifier?: string
+          type?: Database["public"]["Enums"]["entity_type"]
+          updated_at?: string
+        }
+        Relationships: []
+      }
+      entity_risk_scores: {
+        Row: {
+          calculated_at: string
+          entity_id: string
+          id: string
+          last_incident_at: string | null
+          risk_level: string
+          severity_score: number
+          total_incidents: number
+          verified_incidents: number
+        }
+        Insert: {
+          calculated_at?: string
+          entity_id: string
+          id?: string
+          last_incident_at?: string | null
+          risk_level?: string
+          severity_score?: number
+          total_incidents?: number
+          verified_incidents?: number
+        }
+        Update: {
+          calculated_at?: string
+          entity_id?: string
+          id?: string
+          last_incident_at?: string | null
+          risk_level?: string
+          severity_score?: number
+          total_incidents?: number
+          verified_incidents?: number
+        }
+        Relationships: [
+          {
+            foreignKeyName: "entity_risk_scores_entity_id_fkey"
+            columns: ["entity_id"]
+            isOneToOne: true
+            referencedRelation: "entities"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      incident_evidence: {
+        Row: {
+          created_at: string
+          file_name: string | null
+          file_size_bytes: number | null
+          file_type: string
+          file_url: string
+          id: string
+          incident_id: string
+          is_verified: boolean
+          mime_type: string | null
+          verification_notes: string | null
+        }
+        Insert: {
+          created_at?: string
+          file_name?: string | null
+          file_size_bytes?: number | null
+          file_type: string
+          file_url: string
+          id?: string
+          incident_id: string
+          is_verified?: boolean
+          mime_type?: string | null
+          verification_notes?: string | null
+        }
+        Update: {
+          created_at?: string
+          file_name?: string | null
+          file_size_bytes?: number | null
+          file_type?: string
+          file_url?: string
+          id?: string
+          incident_id?: string
+          is_verified?: boolean
+          mime_type?: string | null
+          verification_notes?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "incident_evidence_incident_id_fkey"
+            columns: ["incident_id"]
+            isOneToOne: false
+            referencedRelation: "incident_reports"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      incident_reports: {
+        Row: {
+          category: Database["public"]["Enums"]["incident_category"]
+          created_at: string
+          date_occurred: string
+          description: string
+          entity_id: string
+          id: string
+          location: string | null
+          severity: Database["public"]["Enums"]["severity_level"]
+          status: Database["public"]["Enums"]["verification_status"]
+          submitter_ip_hash: string | null
+          title: string
+          updated_at: string
+          verification_confidence: number | null
+          verified_at: string | null
+          what_actually_happened: string | null
+          what_was_promised: string | null
+        }
+        Insert: {
+          category: Database["public"]["Enums"]["incident_category"]
+          created_at?: string
+          date_occurred: string
+          description: string
+          entity_id: string
+          id?: string
+          location?: string | null
+          severity?: Database["public"]["Enums"]["severity_level"]
+          status?: Database["public"]["Enums"]["verification_status"]
+          submitter_ip_hash?: string | null
+          title: string
+          updated_at?: string
+          verification_confidence?: number | null
+          verified_at?: string | null
+          what_actually_happened?: string | null
+          what_was_promised?: string | null
+        }
+        Update: {
+          category?: Database["public"]["Enums"]["incident_category"]
+          created_at?: string
+          date_occurred?: string
+          description?: string
+          entity_id?: string
+          id?: string
+          location?: string | null
+          severity?: Database["public"]["Enums"]["severity_level"]
+          status?: Database["public"]["Enums"]["verification_status"]
+          submitter_ip_hash?: string | null
+          title?: string
+          updated_at?: string
+          verification_confidence?: number | null
+          verified_at?: string | null
+          what_actually_happened?: string | null
+          what_was_promised?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "incident_reports_entity_id_fkey"
+            columns: ["entity_id"]
+            isOneToOne: false
+            referencedRelation: "entities"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
     }
     Views: {
       [_ in never]: never
@@ -23,7 +205,20 @@ export type Database = {
       [_ in never]: never
     }
     Enums: {
-      [_ in never]: never
+      entity_type: "person" | "business" | "phone" | "website" | "service"
+      incident_category:
+        | "fraud"
+        | "scam"
+        | "harassment"
+        | "misrepresentation"
+        | "non_delivery"
+        | "quality_issue"
+        | "safety_concern"
+        | "data_breach"
+        | "unauthorized_charges"
+        | "other"
+      severity_level: "low" | "medium" | "high" | "critical"
+      verification_status: "pending" | "verified" | "disputed" | "rejected"
     }
     CompositeTypes: {
       [_ in never]: never
@@ -150,6 +345,22 @@ export type CompositeTypes<
 
 export const Constants = {
   public: {
-    Enums: {},
+    Enums: {
+      entity_type: ["person", "business", "phone", "website", "service"],
+      incident_category: [
+        "fraud",
+        "scam",
+        "harassment",
+        "misrepresentation",
+        "non_delivery",
+        "quality_issue",
+        "safety_concern",
+        "data_breach",
+        "unauthorized_charges",
+        "other",
+      ],
+      severity_level: ["low", "medium", "high", "critical"],
+      verification_status: ["pending", "verified", "disputed", "rejected"],
+    },
   },
 } as const
