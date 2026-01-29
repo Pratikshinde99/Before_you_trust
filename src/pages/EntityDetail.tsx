@@ -6,6 +6,7 @@ import { IncidentCard } from '@/components/incident/IncidentCard';
 import { FlagIncidentDialog } from '@/components/incident/FlagIncidentDialog';
 import { RiskIndicator } from '@/components/shared/RiskIndicator';
 import { PatternSummary } from '@/components/ai/PatternSummary';
+import { IncidentPagination } from '@/components/entity/IncidentPagination';
 import { LoadingState, EmptyState, ErrorState } from '@/components/shared/States';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -13,6 +14,8 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useEntity, useRiskScore, useGenerateSummary } from '@/hooks/useApi';
 import { EntityType } from '@/types';
+
+const INCIDENTS_PER_PAGE = 10;
 
 const entityIcons: Record<EntityType, typeof User> = {
   person: User,
@@ -33,8 +36,10 @@ const entityTypeLabels: Record<EntityType, string> = {
 const EntityDetail = () => {
   const { id } = useParams<{ id: string }>();
   const [flagIncidentId, setFlagIncidentId] = useState<string | null>(null);
+  const [currentPage, setCurrentPage] = useState(1);
   
-  const { data, isLoading, error } = useEntity(id, true);
+  const offset = (currentPage - 1) * INCIDENTS_PER_PAGE;
+  const { data, isLoading, error, isFetching } = useEntity(id, true, INCIDENTS_PER_PAGE, offset);
   const { data: riskData } = useRiskScore(id);
   const { data: patternSummary, isLoading: summaryLoading, error: summaryError } = useGenerateSummary(id);
 
@@ -71,6 +76,13 @@ const EntityDetail = () => {
 
   const { entity, risk_score, incidents = [], incidents_total = 0 } = data;
   const Icon = entityIcons[entity.type];
+  const totalPages = Math.ceil(incidents_total / INCIDENTS_PER_PAGE);
+
+  const handlePageChange = (page: number) => {
+    setCurrentPage(page);
+    // Scroll to top of incidents list
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
 
   return (
     <Layout>
@@ -142,8 +154,8 @@ const EntityDetail = () => {
           </TabsList>
 
           <TabsContent value="incidents" className="space-y-6">
-            {/* AI Pattern Summary - above incidents */}
-            {incidents.length > 0 && (
+            {/* AI Pattern Summary - above incidents, only on first page */}
+            {incidents_total > 0 && currentPage === 1 && (
               <PatternSummary
                 data={patternSummary ?? null}
                 isLoading={summaryLoading}
@@ -151,20 +163,51 @@ const EntityDetail = () => {
               />
             )}
 
+            {/* Loading state for page transitions */}
+            {isFetching && incidents.length === 0 && (
+              <LoadingState message="Loading incidents..." />
+            )}
+
             {/* Incident List */}
-            {incidents.length > 0 ? (
-              incidents.map(incident => (
-                <IncidentCard
-                  key={incident.id}
-                  incident={incident}
-                  onFlag={(id) => setFlagIncidentId(id)}
-                />
-              ))
+            {incidents_total > 0 ? (
+              <div className="space-y-4">
+                {/* Page info */}
+                <div className="flex items-center justify-between text-sm text-muted-foreground">
+                  <span>
+                    Showing {offset + 1}–{Math.min(offset + incidents.length, incidents_total)} of {incidents_total} reported incident{incidents_total !== 1 ? 's' : ''}
+                  </span>
+                  {isFetching && (
+                    <span className="text-xs">Updating...</span>
+                  )}
+                </div>
+
+                {/* Incident cards */}
+                <div className={`space-y-4 ${isFetching ? 'opacity-60' : ''}`}>
+                  {incidents.map(incident => (
+                    <IncidentCard
+                      key={incident.id}
+                      incident={incident}
+                      onFlag={(id) => setFlagIncidentId(id)}
+                    />
+                  ))}
+                </div>
+
+                {/* Pagination */}
+                {totalPages > 1 && (
+                  <div className="pt-4">
+                    <IncidentPagination
+                      currentPage={currentPage}
+                      totalPages={totalPages}
+                      onPageChange={handlePageChange}
+                    />
+                  </div>
+                )}
+              </div>
             ) : (
               <EmptyState
                 icon={<FileText className="h-12 w-12" />}
-                title="No incidents reported"
-                description="No incidents have been reported for this entity yet."
+                title="No incidents have been reported"
+                description="There are currently no user-submitted incident reports for this entity. This does not indicate the entity is free of issues—only that none have been reported through this platform."
                 action={
                   <Link to={`/submit?entity=${id}`}>
                     <Button variant="outline">Submit a Report</Button>
