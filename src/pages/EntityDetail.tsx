@@ -6,13 +6,14 @@ import { IncidentCard } from '@/components/incident/IncidentCard';
 import { FlagIncidentDialog } from '@/components/incident/FlagIncidentDialog';
 import { RiskIndicator } from '@/components/shared/RiskIndicator';
 import { PatternSummary } from '@/components/ai/PatternSummary';
+import { RiskExplanation } from '@/components/ai/RiskExplanation';
 import { IncidentPagination } from '@/components/entity/IncidentPagination';
 import { LoadingState, EmptyState, ErrorState } from '@/components/shared/States';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { useEntity, useRiskScore, useGenerateSummary } from '@/hooks/useApi';
+import { useEntity, useRiskScore, useGenerateSummary, useCalculateRisk } from '@/hooks/useApi';
 import { EntityType } from '@/types';
 
 const INCIDENTS_PER_PAGE = 10;
@@ -41,6 +42,7 @@ const EntityDetail = () => {
   const offset = (currentPage - 1) * INCIDENTS_PER_PAGE;
   const { data, isLoading, error, isFetching } = useEntity(id, true, INCIDENTS_PER_PAGE, offset);
   const { data: riskData } = useRiskScore(id);
+  const { data: explainableRisk, isLoading: riskExplanationLoading } = useCalculateRisk(id);
   const { data: patternSummary, isLoading: summaryLoading, error: summaryError } = useGenerateSummary(id);
 
   if (isLoading) {
@@ -217,7 +219,15 @@ const EntityDetail = () => {
             )}
           </TabsContent>
 
-          <TabsContent value="breakdown">
+          <TabsContent value="breakdown" className="space-y-6">
+            {/* Explainable Risk Score */}
+            {riskExplanationLoading ? (
+              <LoadingState message="Calculating risk factors..." />
+            ) : explainableRisk ? (
+              <RiskExplanation riskData={explainableRisk} />
+            ) : null}
+
+            {/* Category/Severity/Status Breakdown */}
             {riskData ? (
               <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
                 {/* By Category */}
