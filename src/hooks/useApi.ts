@@ -31,10 +31,15 @@ export function useSearchEntities(query: string, type?: EntityType, enabled = tr
   });
 }
 
-export function useEntity(id: string | undefined, includeIncidents = true) {
+export function useEntity(
+  id: string | undefined,
+  includeIncidents = true,
+  limit = 10,
+  offset = 0
+) {
   return useQuery<EntityDetailResponse>({
-    queryKey: ['entity', id, includeIncidents],
-    queryFn: () => getEntity(id!, includeIncidents),
+    queryKey: ['entity', id, includeIncidents, limit, offset],
+    queryFn: () => getEntity(id!, includeIncidents, limit, offset),
     enabled: !!id,
     staleTime: 60000, // 1 minute
   });
