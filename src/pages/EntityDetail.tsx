@@ -5,12 +5,13 @@ import { Layout } from '@/components/layout/Layout';
 import { IncidentCard } from '@/components/incident/IncidentCard';
 import { FlagIncidentDialog } from '@/components/incident/FlagIncidentDialog';
 import { RiskIndicator } from '@/components/shared/RiskIndicator';
+import { PatternSummary } from '@/components/ai/PatternSummary';
 import { LoadingState, EmptyState, ErrorState } from '@/components/shared/States';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { useEntity, useRiskScore } from '@/hooks/useApi';
+import { useEntity, useRiskScore, useGenerateSummary } from '@/hooks/useApi';
 import { EntityType } from '@/types';
 
 const entityIcons: Record<EntityType, typeof User> = {
@@ -35,6 +36,7 @@ const EntityDetail = () => {
   
   const { data, isLoading, error } = useEntity(id, true);
   const { data: riskData } = useRiskScore(id);
+  const { data: patternSummary, isLoading: summaryLoading, error: summaryError } = useGenerateSummary(id);
 
   if (isLoading) {
     return (
@@ -139,7 +141,17 @@ const EntityDetail = () => {
             </TabsTrigger>
           </TabsList>
 
-          <TabsContent value="incidents" className="space-y-4">
+          <TabsContent value="incidents" className="space-y-6">
+            {/* AI Pattern Summary - above incidents */}
+            {incidents.length > 0 && (
+              <PatternSummary
+                data={patternSummary ?? null}
+                isLoading={summaryLoading}
+                error={summaryError?.message}
+              />
+            )}
+
+            {/* Incident List */}
             {incidents.length > 0 ? (
               incidents.map(incident => (
                 <IncidentCard
