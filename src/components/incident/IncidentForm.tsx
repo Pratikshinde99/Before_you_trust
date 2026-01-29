@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { z } from 'zod';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
-import { FileText, Send, AlertTriangle } from 'lucide-react';
+import { FileText, Send, AlertTriangle, Info, Sparkles } from 'lucide-react';
 import {
   Form,
   FormControl,
@@ -24,10 +24,11 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { Alert, AlertDescription } from '@/components/ui/alert';
+import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { useToast } from '@/hooks/use-toast';
 import { useSubmitIncident } from '@/hooks/useApi';
 import { EntityType, IncidentCategory } from '@/types';
+import { SubmitIncidentResponse } from '@/lib/api';
 
 const formSchema = z.object({
   entityType: z.enum(['person', 'business', 'phone', 'website', 'service'] as const),
@@ -89,6 +90,7 @@ export function IncidentForm({
   const navigate = useNavigate();
   const { toast } = useToast();
   const submitMutation = useSubmitIncident();
+  const [submissionResult, setSubmissionResult] = useState<SubmitIncidentResponse | null>(null);
 
   const form = useForm<FormData>({
     resolver: zodResolver(formSchema),
@@ -129,12 +131,17 @@ export function IncidentForm({
         location: data.location || undefined,
       });
 
+      setSubmissionResult(result);
+
       toast({
         title: 'Report Submitted',
         description: 'Your incident report has been submitted and is pending review.',
       });
 
-      navigate(`/entity/${result.entity_id}`);
+      // Delay navigation to show AI feedback
+      setTimeout(() => {
+        navigate(`/entity/${result.entity_id}`);
+      }, 3000);
     } catch (error) {
       toast({
         title: 'Submission Failed',
@@ -143,6 +150,65 @@ export function IncidentForm({
       });
     }
   };
+
+  // Show success state with AI feedback
+  if (submissionResult) {
+    return (
+      <Card className="max-w-2xl mx-auto">
+        <CardHeader className="pb-4">
+          <div className="flex items-center gap-3 mb-2">
+            <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-primary/10">
+              <FileText className="h-5 w-5 text-primary" />
+            </div>
+            <div>
+              <CardTitle className="text-xl">Report Submitted Successfully</CardTitle>
+              <CardDescription>
+                Your incident report is now pending review
+              </CardDescription>
+            </div>
+          </div>
+        </CardHeader>
+        
+        <CardContent className="space-y-4">
+          {/* Similarity Warning - Neutral Message */}
+          {submissionResult.similarity_warning && submissionResult.similar_incidents.length > 0 && (
+            <Alert className="border-muted bg-muted/50">
+              <Info className="h-4 w-4" />
+              <AlertTitle className="text-sm font-medium">Similar incidents have been reported</AlertTitle>
+              <AlertDescription className="text-sm text-muted-foreground">
+                {submissionResult.similar_incidents.length} similar report{submissionResult.similar_incidents.length > 1 ? 's' : ''} exist{submissionResult.similar_incidents.length === 1 ? 's' : ''} for this entity. 
+                Your report has been submitted and will be reviewed by our team.
+              </AlertDescription>
+            </Alert>
+          )}
+
+          {/* AI Category Suggestion */}
+          {submissionResult.ai_category && submissionResult.ai_category.differs_from_submitted && (
+            <Alert className="border-primary/20 bg-primary/5">
+              <Sparkles className="h-4 w-4 text-primary" />
+              <AlertTitle className="text-sm font-medium">Category Suggestion</AlertTitle>
+              <AlertDescription className="text-sm text-muted-foreground">
+                Our AI suggests this incident may also relate to "{submissionResult.ai_category.suggested.replace('_', ' ')}". 
+                This information will help reviewers during the verification process.
+              </AlertDescription>
+            </Alert>
+          )}
+
+          <p className="text-sm text-muted-foreground">
+            Redirecting to entity page in a moment...
+          </p>
+
+          <Button 
+            variant="outline" 
+            onClick={() => navigate(`/entity/${submissionResult.entity_id}`)}
+            className="w-full"
+          >
+            View Entity Now
+          </Button>
+        </CardContent>
+      </Card>
+    );
+  }
 
   return (
     <Card className="max-w-2xl mx-auto">

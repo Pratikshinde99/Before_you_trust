@@ -179,7 +179,32 @@ export interface SubmitIncidentRequest {
   location?: string;
 }
 
-export async function submitIncident(data: SubmitIncidentRequest): Promise<{ id: string; entity_id: string }> {
+export interface SimilarIncident {
+  incident_id: string;
+  similarity_score: number;
+  title: string;
+  reason?: string;
+}
+
+export interface SubmitIncidentResponse {
+  id: string;
+  entity_id: string;
+  title: string;
+  status: string;
+  created_at: string;
+  verification_confidence: number;
+  ai_category: {
+    suggested: string;
+    confidence: number;
+    explanation: string;
+    differs_from_submitted: boolean;
+  } | null;
+  similar_incidents: SimilarIncident[];
+  similarity_warning: boolean;
+  similarity_message: string | null;
+}
+
+export async function submitIncident(data: SubmitIncidentRequest): Promise<SubmitIncidentResponse> {
   const response = await fetch(`${FUNCTIONS_URL}/submit-incident`, {
     method: 'POST',
     headers: {
